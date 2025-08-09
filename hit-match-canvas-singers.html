@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hit Match — Canvas (Singer Caricatures)</title>
+<style>
+  html,body{height:100%;margin:0}
+  body{display:flex;align-items:center;justify-content:center;background:#0c0f16;color:#e7ecf3;font-family:system-ui, -apple-system, Segoe UI, Roboto}
+  .wrap{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;justify-content:center;padding:14px}
+  .panel{background:#141a26;border-radius:14px;padding:12px;min-width:260px}
+  h1{font-size:18px;margin:0 0 6px 0}
+  .stat{display:flex;gap:10px;margin:8px 0 12px 0}
+  .badge{background:#0f1320;border:1px solid #2a3356;border-radius:10px;padding:8px 10px}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  button{background:#2a66ff;border:0;color:#fff;border-radius:10px;padding:10px 12px;font-weight:700}
+  canvas{background:#101525;border-radius:16px;touch-action:none}
+  .hint{color:#9aa4ba;font-size:12px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="panel">
+    <h1>Hit Match — Canvas (Singer Caricatures)</h1>
+    <div class="stat">
+      <div class="badge">Score: <span id="score">0</span></div>
+      <div class="badge">Moves: <span id="moves">30</span></div>
+      <div class="badge">Goal: <span id="goal">3000</span></div>
+    </div>
+    <div class="row">
+      <button id="new">New</button>
+      <button id="shuffle">Shuffle</button>
+      <button id="undo">Undo</button>
+    </div>
+    <div class="hint">Tap/drag to swap neighbors. Only swaps that make a match are allowed.</div>
+  </div>
+  <canvas id="game" width="640" height="640"></canvas>
+</div>
+<script>
+(() => {
+  const SIZE = 8;
+  const MOVES_START = 30, GOAL = 3000;
+  // Caricature palette and keys
+  const TYPES = [
+    {key:'BEY', name:'Beyoncé', hue:48,  bg:'#f8d34f', fg:'#3e2a00', accent:'#f3b800'},
+    {key:'FRE', name:'Freddie', hue:280, bg:'#caa6ff', fg:'#1b0a33', accent:'#a86bff'},
+    {key:'TAY', name:'Taylor',  hue:338, bg:'#ff9fbe', fg:'#3a0018', accent:'#ff4d79'},
+    {key:'MJ',  name:'M. Jackson', hue:205, bg:'#8fd3ff', fg:'#001d33', accent:'#4fb7ff'},
+    {key:'ELV', name:'Elvis',   hue:180, bg:'#7ef0d4', fg:'#002a20', accent:'#00d0a8'}
+  ];
+
+  const $ = s => document.querySelector(s);
+  const canvas = $('#game'), ctx = canvas.getContext('2d');
+  const scoreEl = $('#score'), movesEl = $('#moves'), goalEl = $('#goal');
+  goalEl.textContent = GOAL;
+
+  let grid = [];
+  let score = 0, moves = MOVES_START;
+  let history = [];
+  let cell = 64, pad = 10;
+
+  function randType(){ return (Math.random()*TYPES.length)|0; }
+
+  function initGrid() {
+    grid = Array.from({length: SIZE*SIZE}, randType);
+    let changed = true, safety = 0;
+    while (changed && safety < 500) {
+      changed = false; safety++;
+      for (let i=0;i<grid.length;i++) {
+        if (isPartOfMatch(i)) { grid[i] = randType(); changed = true; }
+      }
+    }
+  }
+
+  function idx(r,c){ return r*SIZE+c; }
+  function rc(i){ return [ (i/ SIZE) |0, i%SIZE ]; }
+
+  function isMatchAt(r,c) {
+    const t = grid[idx(r,c)];
+    if (t==null) return false;
+    let n=1;
+    for(let cc=c-1; cc>=0 && grid[idx(r,cc)]===t; cc--) n++;
+    for(let cc=c+1; cc<SIZE && grid[idx(r,cc)]===t; cc++) n++;
+    if (n>=3) return true;
+    n=1;
+    for(let rr=r-1; rr>=0 && grid[idx(rr,c)]===t; rr--) n++;
+    for(let rr=r+1; rr<SIZE && grid[idx(rr,c)]===t; rr++) n++;
+    return n>=3;
+  }
+  function isPartOfMatch(i){ const [r,c]=rc(i); return isMatchAt(r,c); }
+
+  function findMatches(){
+    const m = new Set();
+    for(let r=0;r<SIZE;r++){
+      for(let c=0;c<SIZE;c++){
+        const t = grid[idx(r,c)]; if (t==null) continue;
+        let run=1; for(let cc=c+1; cc<SIZE && grid[idx(r,cc)]===t; cc++) run++;
+        if (run>=3) for(let cc=c; cc<c+run; cc++) m.add(idx(r,cc));
+        run=1; for(let rr=r+1; rr<SIZE && grid[idx(rr,c)]===t; rr++) run++;
+        if (run>=3) for(let rr=r; rr<r+run; rr++) m.add(idx(rr,c));
+      }
+    }
+    return m;
+  }
+
+  function collapseAndFill(){
+    for(let c=0;c<SIZE;c++){
+      const col=[];
+      for(let r=0;r<SIZE;r++){ const v=grid[idx(r,c)]; if(v!=null) col.push(v); }
+      while(col.length<SIZE) col.unshift(randType());
+      for(let r=0;r<SIZE;r++) grid[idx(r,c)] = col[r];
+    }
+  }
+
+  // Draw helpers
+  function roundRect(x, y, w, h, r, draw){
+    ctx.beginPath();
+    ctx.moveTo(x+r, y);
+    ctx.arcTo(x+w, y, x+w, y+h, r);
+    ctx.arcTo(x+w, y+h, x, y+h, r);
+    ctx.arcTo(x, y+h, x, y, r);
+    ctx.arcTo(x, y, x+w, y, r);
+    ctx.closePath(); draw();
+  }
+  function circle(x,y,r,fill){ ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); fill && ctx.fill(); }
+
+  function drawTile(typeIndex, x, y, s){
+    const t = TYPES[typeIndex];
+    // Card
+    roundRect(x, y, s, s, 12, ()=>{ ctx.fillStyle = '#1b2234'; ctx.fill(); });
+    roundRect(x+6, y+6, s-12, s-12, 12, ()=>{ ctx.fillStyle = t.bg; ctx.fill(); });
+
+    // Common face base
+    const cx = x + s/2, cy = y + s*0.60, fr = s*0.22;
+    ctx.fillStyle = `hsl(${t.hue},70%,50%)`; circle(cx, cy, fr, true);
+
+    // Eyes + mouth
+    ctx.fillStyle = t.fg; circle(cx - s*0.06, cy - s*0.01, 3, true); circle(cx + s*0.06, cy - s*0.01, 3, true);
+    ctx.strokeStyle = t.fg; ctx.lineWidth = 2.5; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(cx - s*0.10, cy + s*0.11); ctx.quadraticCurveTo(cx, cy + s*0.17, cx + s*0.10, cy + s*0.11); ctx.stroke();
+
+    // Accessory per singer
+    ctx.save();
+    switch(t.key){
+      case 'BEY': {
+        // Wavy golden hair + crown + gold mic
+        ctx.fillStyle = `hsl(${t.hue},70%,28%)`;
+        ctx.beginPath();
+        ctx.moveTo(x+12, y+s*0.40);
+        ctx.bezierCurveTo(x+16, y+18, x+s-16, y+18, x+s-12, y+s*0.40);
+        ctx.lineTo(x+s-12, y+s*0.26); ctx.lineTo(x+12, y+s*0.26); ctx.closePath(); ctx.fill();
+        // crown
+        ctx.fillStyle = t.accent;
+        const cyc = y+s*0.26;
+        ctx.beginPath();
+        ctx.moveTo(cx-26, cyc);
+        ctx.lineTo(cx-14, cyc-16);
+        ctx.lineTo(cx-2, cyc);
+        ctx.lineTo(cx+10, cyc-16);
+        ctx.lineTo(cx+22, cyc);
+        ctx.closePath(); ctx.fill();
+        // mic (golden)
+        ctx.strokeStyle = t.accent; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(cx+s*0.18, cy+s*0.03); ctx.lineTo(cx+s*0.32, cy+s*0.18); ctx.stroke();
+        ctx.fillStyle = t.accent; circle(cx+s*0.35, cy+s*0.21, 6, true);
+        break;
+      }
+      case 'FRE': {
+        // Short hair + thick mustache + white tank strap
+        ctx.fillStyle = '#202030';
+        ctx.beginPath();
+        ctx.moveTo(x+14, y+s*0.38);
+        ctx.bezierCurveTo(x+22, y+18, x+s-22, y+18, x+s-14, y+s*0.38);
+        ctx.lineTo(x+s-14, y+s*0.28); ctx.lineTo(x+14, y+s*0.28); ctx.closePath(); ctx.fill();
+        // mustache
+        ctx.fillStyle = '#1b0a33';
+        ctx.beginPath();
+        ctx.ellipse(cx, cy + s*0.06, s*0.16, s*0.06, 0, 0, Math.PI*2);
+        ctx.fill();
+        // tank top straps
+        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(cx-18, cy+fr-6); ctx.lineTo(cx-6, cy+fr+6);
+        ctx.moveTo(cx+18, cy+fr-6); ctx.lineTo(cx+6, cy+fr+6); ctx.stroke();
+        break;
+      }
+      case 'TAY': {
+        // Blonde bangs + red lipstick + guitar neck
+        ctx.fillStyle = '#ffd899';
+        ctx.beginPath();
+        ctx.moveTo(x+16, y+s*0.35); ctx.lineTo(x+s-16, y+s*0.35);
+        ctx.quadraticCurveTo(cx, y+14, x+16, y+s*0.35); ctx.fill();
+        // red lips
+        ctx.strokeStyle = '#d1003b'; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.moveTo(cx - s*0.08, cy + s*0.12); ctx.quadraticCurveTo(cx, cy + s*0.15, cx + s*0.08, cy + s*0.12); ctx.stroke();
+        // guitar neck (brown) on right
+        ctx.strokeStyle = '#7a4a28'; ctx.lineWidth = 6; ctx.lineCap='round';
+        ctx.beginPath(); ctx.moveTo(cx+s*0.20, cy+ s*0.00); ctx.lineTo(cx+s*0.36, cy - s*0.16); ctx.stroke();
+        break;
+      }
+      case 'MJ': {
+        // Black fedora + single white glove
+        // fedora brim
+        ctx.fillStyle = '#0a0a0a'; roundRect(cx-32, y+s*0.26, 64, 10, 5, ()=>{ ctx.fillStyle='#0a0a0a'; ctx.fill(); });
+        // top
+        roundRect(cx-22, y+s*0.14, 44, 20, 6, ()=>{ ctx.fillStyle='#0a0a0a'; ctx.fill(); });
+        // curl
+        ctx.strokeStyle = '#0d0d0d'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(cx-18, y+s*0.28); ctx.bezierCurveTo(cx-24, y+s*0.40, cx-8, y+s*0.50, cx-14, y+s*0.60); ctx.stroke();
+        // white glove (sparkle)
+        ctx.fillStyle = '#ffffff'; circle(cx+s*0.26, cy+s*0.10, 7, true);
+        ctx.fillStyle = '#d8f0ff'; circle(cx+s*0.26, cy+s*0.10, 2, true);
+        break;
+      }
+      case 'ELV': {
+        // Big pompadour + sunglasses + popped collar
+        ctx.fillStyle = '#1a120b';
+        ctx.beginPath();
+        ctx.moveTo(cx-34, y+s*0.30);
+        ctx.bezierCurveTo(cx-10, y+2, cx+28, y+4, cx+34, y+s*0.30);
+        ctx.lineTo(cx+34, y+s*0.22); ctx.lineTo(cx-34, y+s*0.22); ctx.closePath(); ctx.fill();
+        // sunglasses
+        ctx.fillStyle = '#0a0a0a'; roundRect(cx-22, cy-10, 18, 12, 3, ()=>{ ctx.fill(); }); roundRect(cx+4, cy-10, 18, 12, 3, ()=>{ ctx.fill(); });
+        ctx.fillRect(cx-4, cy-5, 8, 2);
+        // collar
+        ctx.fillStyle = '#defcf4';
+        ctx.beginPath(); ctx.moveTo(cx-22, cy+fr-2); ctx.lineTo(cx-38, cy+fr+16); ctx.lineTo(cx-10, cy+fr+6); ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(cx+22, cy+fr-2); ctx.lineTo(cx+38, cy+fr+16); ctx.lineTo(cx+10, cy+fr+6); ctx.closePath(); ctx.fill();
+        break;
+      }
+    }
+    ctx.restore();
+
+    // Name/initials pill
+    roundRect(x+s*0.22, y+s*0.80, s*0.56, s*0.16, 8, ()=>{ ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fill(); });
+    ctx.fillStyle = t.fg; ctx.font = `bold ${Math.floor(s*0.13)}px system-ui`; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(t.key, cx, y+s*0.88);
+  }
+
+  function fitCanvas(){
+    const max = Math.min(640, Math.min(window.innerWidth-32, window.innerHeight-32));
+    canvas.width = canvas.height = max>360 ? max : 360;
+    const slots = SIZE;
+    pad = Math.max(6, Math.floor(canvas.width * 0.012));
+    cell = Math.floor((canvas.width - pad*(slots+1)) / slots);
+  }
+
+  function draw() {
+    fitCanvas();
+    ctx.clearRect(0,0,canvas.width, canvas.height);
+    ctx.fillStyle = '#0e1422'; ctx.fillRect(0,0,canvas.width, canvas.height);
+    for(let r=0;r<SIZE;r++){
+      for(let c=0;c<SIZE;c++){
+        const x = pad + c*(cell+pad);
+        const y = pad + r*(cell+pad);
+        const t = grid[idx(r,c)];
+        if (t!=null) drawTile(t, x, y, cell);
+      }
+    }
+    scoreEl.textContent = score; movesEl.textContent = moves;
+  }
+
+  function swap(a,b){ const t=grid[a]; grid[a]=grid[b]; grid[b]=t; }
+  function neighbors(i){ const [r,c]=rc(i); const ns=[]; if(r>0)ns.push(idx(r-1,c)); if(r<SIZE-1)ns.push(idx(r+1,c)); if(c>0)ns.push(idx(r,c-1)); if(c<SIZE-1)ns.push(idx(r,c+1)); return ns; }
+  function makesAnyMatch(i,j){ const cells=new Set([i,j,...neighbors(i),...neighbors(j)]); for(const k of cells){ const [r,c]=rc(k); if(isMatchAt(r,c)) return true; } return false; }
+
+  function animateRemoval(matches, cb){
+    const fading = Array.from(matches);
+    const start = performance.now();
+    function step(t){
+      const k = Math.min(1, (t-start)/220);
+      draw();
+      ctx.globalAlpha = 1-k;
+      for(const i of fading){
+        const [r,c]=rc(i);
+        const x = pad + c*(cell+pad), y = pad + r*(cell+pad);
+        if (grid[i]!=null) drawTile(grid[i], x, y, cell);
+      }
+      ctx.globalAlpha = 1;
+      if (k<1) requestAnimationFrame(step); else cb();
+    }
+    requestAnimationFrame(step);
+  }
+
+  function resolveBoard(){
+    let combo=0;
+    const loop=()=>{
+      const matches = findMatches();
+      if (matches.size===0){ draw(); checkEnd(); return; }
+      combo++;
+      score += 60 * matches.size * combo;
+      animateRemoval(matches, ()=>{
+        for(const i of matches) grid[i]=null;
+        collapseAndFill();
+        draw();
+        setTimeout(loop, 40);
+      });
+    };
+    draw();
+    setTimeout(loop, 40);
+  }
+
+  function checkEnd(){
+    if (moves<=0){
+      setTimeout(()=>{ alert(score>=GOAL ? 'Level Clear!' : 'Out of moves!'); }, 10);
+    }
+  }
+
+  // input + layout vars
+  let pad = 10, cell = 64;
+  let down = null, downXY=null;
+  function pickCell(x,y){
+    const c = Math.floor((x - pad) / (cell+pad));
+    const r = Math.floor((y - pad) / (cell+pad));
+    if (r<0||c<0||r>=SIZE||c>=SIZE) return null;
+    return idx(r,c);
+  }
+
+  canvas.addEventListener('pointerdown', e => {
+    const rect = canvas.getBoundingClientRect();
+    down = pickCell(e.clientX-rect.left, e.clientY-rect.top);
+    downXY = [e.clientX, e.clientY];
+  }, {passive:true});
+  canvas.addEventListener('pointerup', e => {
+    if (down==null) return;
+    const rect = canvas.getBoundingClientRect();
+    const up = pickCell(e.clientX-rect.left, e.clientY-rect.top);
+    const dx = e.clientX - downXY[0], dy = e.clientY - downXY[1];
+    let target = up;
+    if (target==null || target===down || !neighbors(down).includes(target)){
+      const [r,c] = rc(down);
+      if (Math.abs(dx) > Math.abs(dy)){
+        if (dx>16 && c<SIZE-1) target = idx(r,c+1);
+        else if (dx<-16 && c>0) target = idx(r,c-1);
+      }else{
+        if (dy>16 && r<SIZE-1) target = idx(r+1,c);
+        else if (dy<-16 && r>0) target = idx(r-1,c);
+      }
+    }
+    if (target!=null && neighbors(down).includes(target)){
+      history.push({grid:grid.slice(), score, moves});
+      swap(down, target);
+      if (!makesAnyMatch(down, target)){
+        swap(down, target);
+      } else {
+        moves--;
+        resolveBoard();
+      }
+    }
+    down=null; downXY=null;
+  }, {passive:true});
+  window.addEventListener('resize', ()=> draw(), {passive:true});
+
+  // buttons
+  $('#new').addEventListener('click', newGame);
+  $('#shuffle').addEventListener('click', ()=>{
+    history.push({grid:grid.slice(), score, moves});
+    grid.sort(()=>Math.random()-0.5); draw();
+  });
+  $('#undo').addEventListener('click', ()=>{
+    const last = history.pop();
+    if (!last) return;
+    grid = last.grid.slice(); score = last.score; moves = last.moves; draw();
+  });
+
+  function newGame(){ score = 0; moves = MOVES_START; history=[]; initGrid(); draw(); }
+  newGame();
+})();
+</script>
+</body>
+</html>
